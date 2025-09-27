@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ report.title or 'CyberSentinel Scan Report' }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --success-color: #2ecc71;
+            --danger-color: #e74c3c;
+            --warning-color: #f39c12;
+            --info-color: #3498db;
+            --light-color: #f8f9fa;
+            --dark-color: #343a40;
+            --border-color: #dee2e6;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .navbar {
+            background-color: var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .navbar-brand .title {
+            color: white;
+        }
+        
+        .hero {
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 3rem 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .card {
+            box-shadow: 0 2px 3px rgba(10, 10, 10, 0.1), 0 0 0 1px rgba(10, 10, 10, 0.1);
+            margin-bottom: 1.5rem;
+        }
+        
+        .card-header {
+            background-color: #f5f5f5;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+        }
+        
+        .card-content {
+            padding: 1.5rem;
+        }
+        
+        .severity-critical {
+            background-color: #ffebee !important;
+            border-left: 4px solid var(--danger-color);
+        }
+        
+        .severity-high {
+            background-color: #fff3e0 !important;
+            border-left: 4px solid #ff9800;
+        }
+        
+        .severity-medium {
+            background-color: #fff8e1 !important;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .severity-low {
+            background-color: #e3f2fd !important;
+            border-left: 4px solid var(--info-color);
+        }
+        
+        .severity-info {
+            background-color: #e8f5e9 !important;
+            border-left: 4px solid var(--success-color);
+        }
+        
+        .severity-unknown {
+            background-color: #f5f5f5 !important;
+            border-left: 4px solid #9e9e9e;
+        }
+        
+        .severity-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: white;
+            display: inline-block;
+            margin-right: 0.5rem;
+        }
+        
+        .severity-badge.critical {
+            background-color: var(--danger-color);
+        }
+        
+        .severity-badge.high {
+            background-color: #ff9800;
+        }
+        
+        .severity-badge.medium {
+            background-color: #ffc107;
+            color: #000;
+        }
+        
+        .severity-badge.low {
+            background-color: var(--info-color);
+        }
+        
+        .severity-badge.info {
+            background-color: var(--success-color);
+        }
+        
+        .severity-badge.unknown {
+            background-color: #9e9e9e;
+        }
+        
+        .finding-card {
+            margin-bottom: 1rem;
+            transition: transform 0.2s;
+        }
+        
+        .finding-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .finding-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .finding-meta {
+            font-size: 0.85rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+        
+        .finding-description {
+            margin-bottom: 1rem;
+        }
+        
+        .finding-details {
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .finding-details-title {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: #444;
+        }
+        
+        .finding-details-content {
+            font-family: 'Courier New', Courier, monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            background-color: #f5f5f5;
+            padding: 0.75rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            overflow-x: auto;
+        }
+        
+        .footer {
+            background-color: var(--primary-color);
+            color: white;
+            padding: 2rem 1.5rem;
+            margin-top: 3rem;
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            color: var(--primary-color);
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 0.5rem;
+            display: inline-block;
+        }
+        
+        .summary-card {
+            text-align: center;
+            padding: 1.5rem;
+            border-radius: 8px;
+            color: white;
+            margin-bottom: 1.5rem;
+        }
+        
+        .summary-card.critical {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+        }
+        
+        .summary-card.high {
+            background: linear-gradient(135deg, #e67e22 0%, #d35400 100%);
+        }
+        
+        .summary-card.medium {
+            background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+        }
+        
+        .summary-card.low {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+        }
+        
+        .summary-card.info {
+            background: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+        }
+        
+        .summary-card .count {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin: 0.5rem 0;
+            line-height: 1;
+        }
+        
+        .summary-card .label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-bottom: 2rem;
+        }
+        
+        .tabs ul {
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .tabs a {
+            border-bottom: 3px solid transparent;
+            margin-bottom: -1px;
+            padding-bottom: calc(0.75em - 3px);
+        }
+        
+        .tabs a:hover {
+            border-bottom-color: #dbdbdb;
+        }
+        
+        .tabs li.is-active a {
+            border-bottom-color: var(--primary-color);
+            color: var(--primary-color);
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 1.5rem 0;
+        }
+        
+        .tab-content.is-active {
+            display: block;
+        }
+        
+        @media print {
+            .no-print {
+                display: none !important;
+            }
+            
+            .hero {
+                padding: 1rem 0;
+                margin-bottom: 1rem;
+            }
+            
+            .card {
+                box-shadow: none;
+                border: 1px solid #ddd;
+                page-break-inside: avoid;
+            }
+            
+            .section {
+                page-break-before: always;
+            }
+            
+            .section:first-child {
+                page-break-before: auto;
+            }
+            
+            .footer {
+                display: none;
+            }
+            
+            @page {
+                size: A4;
+                margin: 1.5cm;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" role="navigation" aria-label="main navigation">
+        <div class="container">
+            <div class="navbar-brand">
+                <a class="navbar-item" href="#">
+                    <h1 class="title is-4">CyberSentinel</h1>
+                </a>
+                <a role="button" class="navbar-burger" aria-label="menu" aria-expanded="false" data-target="navbarBasic">
+                    <span aria-hidden="true"></span>
+                    <span aria-hidden="true"></span>
+                    <span aria-hidden="true"></span>
+                </a>
+            </div>
+            <div id="navbarBasic" class="navbar-menu">
+                <div class="navbar-end">
+                    <div class="navbar-item">
+                        <div class="buttons">
+                            <button id="printBtn" class="button is-light no-print">
+                                <span class="icon">
+                                    <i class="fas fa-print"></i>
+                                </span>
+                                <span>Print</span>
+                            </button>
+                            <button id="exportPdfBtn" class="button is-light no-print">
+                                <span class="icon">
+                                    <i class="fas fa-file-pdf"></i>
+                                </span>
+                                <span>Export PDF</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <h1 class="title">
+                {{ report.title or 'Vulnerability Scan Report' }}
+            </h1>
+            <p class="subtitle">
+                {{ report.timestamp | format_timestamp('%Y-%m-%d %H:%M:%S %Z') }}
+            </p>
+        </div>
+    </section>
+
+    <div class="container">
+        <!-- Summary Section -->
+        <section class="section">
+            <h2 class="section-title">Summary</h2>
+            
+            <div class="columns is-multiline">
+                <div class="column is-2">
+                    <div class="summary-card critical">
+                        <div class="label">Critical</div>
+                        <div class="count">{{ report.summary.severity_counts.critical | default(0) }}</div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="summary-card high">
+                        <div class="label">High</div>
+                        <div class="count">{{ report.summary.severity_counts.high | default(0) }}</div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="summary-card medium">
+                        <div class="label">Medium</div>
+                        <div class="count">{{ report.summary.severity_counts.medium | default(0) }}</div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="summary-card low">
+                        <div class="label">Low</div>
+                        <div class="count">{{ report.summary.severity_counts.low | default(0) }}</div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="summary-card info">
+                        <div class="label">Info</div>
+                        <div class="count">{{ report.summary.severity_counts.info | default(0) }}</div>
+                    </div>
+                </div>
+                <div class="column is-2">
+                    <div class="summary-card" style="background: linear-gradient(135deg, #9e9e9e 0%, #616161 100%);">
+                        <div class="label">Total</div>
+                        <div class="count">{{ report.summary.total_findings | default(0) }}</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="chart-container">
+                <canvas id="severityChart"></canvas>
+            </div>
+        </section>
+        
+        <!-- Findings Section -->
+        <section class="section">
+            <div class="level">
+                <div class="level-left">
+                    <h2 class="section-title">Findings</h2>
+                </div>
+                <div class="level-right">
+                    <div class="field has-addons">
+                        <div class="control">
+                            <div class="select is-small">
+                                <select id="severityFilter">
+                                    <option value="all">All Severities</option>
+                                    <option value="critical">Critical</option>
+                                    <option value="high">High</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="low">Low</option>
+                                    <option value="info">Info</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="control">
+                            <input id="searchInput" class="input is-small" type="text" placeholder="Search findings...">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="findingsContainer">
+                {% for finding in report.findings %}
+                <div class="card finding-card severity-{{ finding.severity | lower }}" 
+                     data-severity="{{ finding.severity | lower }}"
+                     data-title="{{ finding.title | lower }}"
+                     data-description="{{ finding.description | lower }}">
+                    <header class="card-header">
+                        <p class="card-header-title">
+                            <span class="severity-badge {{ finding.severity | lower }}">
+                                {{ finding.severity }}
+                            </span>
+                            {{ finding.title }}
+                        </p>
+                        <button class="card-header-icon toggle-details" aria-label="more options">
+                            <span class="icon">
+                                <i class="fas fa-angle-down" aria-hidden="true"></i>
+                            </span>
+                        </button>
+                    </header>
+                    <div class="card-content" style="display: none;">
+                        <div class="finding-description">
+                            {{ finding.description | safe }}
+                        </div>
+                        
+                        {% if finding.impact %}
+                        <div class="finding-details">
+                            <div class="finding-details-title">Impact</div>
+                            <div class="finding-details-content">{{ finding.impact | safe }}</div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if finding.recommendation %}
+                        <div class="finding-details">
+                            <div class="finding-details-title">Recommendation</div>
+                            <div class="finding-details-content">{{ finding.recommendation | safe }}</div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if finding.evidence %}
+                        <div class="finding-details">
+                            <div class="finding-details-title">Evidence</div>
+                            <div class="finding-details-content">{{ finding.evidence | safe }}</div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if finding.references %}
+                        <div class="finding-details">
+                            <div class="finding-details-title">References</div>
+                            <div class="content">
+                                <ul>
+                                    {% for ref in finding.references %}
+                                    <li><a href="{{ ref }}" target="_blank">{{ ref }}</a></li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% else %}
+                <div class="notification is-light">
+                    No findings to display.
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        
+        <!-- Scan Details Section -->
+        <section class="section">
+            <h2 class="section-title">Scan Details</h2>
+            
+            <div class="content">
+                <table class="table is-fullwidth is-striped">
+                    <tbody>
+                        <tr>
+                            <th>Scan ID</th>
+                            <td>{{ report.scan_id or 'N/A' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Target</th>
+                            <td>{{ report.target or 'N/A' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Scan Type</th>
+                            <td>{{ report.scan_type or 'N/A' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Start Time</th>
+                            <td>{{ report.start_time | format_timestamp('%Y-%m-%d %H:%M:%S %Z') }}</td>
+                        </tr>
+                        <tr>
+                            <th>End Time</th>
+                            <td>{{ report.end_time | format_timestamp('%Y-%m-%d %H:%M:%S %Z') }}</td>
+                        </tr>
+                        <tr>
+                            <th>Duration</th>
+                            <td>{{ report.duration or 'N/A' }}</td>
+                        </tr>
+                        <tr>
+                            <th>Scanner Version</th>
+                            <td>{{ report.scanner_version or 'N/A' }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        
+        <!-- Appendix Section -->
+        <section class="section">
+            <h2 class="section-title">Appendix</h2>
+            
+            <div class="content">
+                <h3>Severity Levels</h3>
+                <ul>
+                    <li><strong>Critical:</strong> Vulnerabilities that pose an immediate risk and should be addressed immediately.</li>
+                    <li><strong>High:</strong> High-risk vulnerabilities that should be addressed as soon as possible.</li>
+                    <li><strong>Medium:</strong> Medium-risk vulnerabilities that should be addressed in a timely manner.</li>
+                    <li><strong>Low:</strong> Low-risk vulnerabilities that should be reviewed and addressed when possible.</li>
+                    <li><strong>Info:</strong> Informational findings that do not represent a direct vulnerability.</li>
+                </ul>
+                
+                <h3>Disclaimer</h3>
+                <p>
+                    This report is provided for informational purposes only. The information contained in this 
+                    report is based on the results of automated scanning tools and may contain inaccuracies. 
+                    The findings should be reviewed and validated by a qualified security professional before 
+                    taking any remedial action. The authors of this report are not responsible for any damages 
+                    or liabilities arising from the use of this information.
+                </p>
+                
+                <h3>About CyberSentinel</h3>
+                <p>
+                    CyberSentinel is a comprehensive vulnerability scanner designed to help identify security 
+                    vulnerabilities in networks, systems, and applications. For more information, please visit 
+                    <a href="https://github.com/yourusername/cybersentinel" target="_blank">GitHub</a>.
+                </p>
+            </div>
+        </section>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="content has-text-centered">
+            <p>
+                <strong>CyberSentinel</strong> - Vulnerability Scan Report
+                <br>
+                Generated on {{ report.timestamp | format_timestamp('%Y-%m-%d %H:%M:%S %Z') }}
+            </p>
+        </div>
+    </footer>
+    
+    <script>
+        // Initialize the severity chart
+        document.addEventListener('DOMContentLoaded', function() {
+            // Chart data from the template
+            const chartData = {
+                labels: {{ report._charts.severity_distribution | map(attribute='severity') | tojson_pretty | safe }},
+                datasets: [{
+                    data: {{ report._charts.severity_distribution | map(attribute='count') | tojson_pretty | safe }},
+                    backgroundColor: {{ report._charts.severity_distribution | map(attribute='color') | tojson_pretty | safe }},
+                    borderWidth: 1
+                }]
+            };
+            
+            // Create the chart
+            const ctx = document.getElementById('severityChart').getContext('2d');
+            const severityChart = new Chart(ctx, {
+                type: 'bar',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    legend: {
+                        display: false
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                stepSize: 1
+                            }
+                        }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.parsed.y} ${context.parsed.y === 1 ? 'finding' : 'findings'}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Toggle finding details
+            document.querySelectorAll('.toggle-details').forEach(button => {
+                button.addEventListener('click', function() {
+                    const cardContent = this.closest('.card').querySelector('.card-content');
+                    const icon = this.querySelector('i');
+                    
+                    if (cardContent.style.display === 'none') {
+                        cardContent.style.display = 'block';
+                        icon.classList.remove('fa-angle-down');
+                        icon.classList.add('fa-angle-up');
+                    } else {
+                        cardContent.style.display = 'none';
+                        icon.classList.remove('fa-angle-up');
+                        icon.classList.add('fa-angle-down');
+                    }
+                });
+            });
+            
+            // Filter findings by severity
+            document.getElementById('severityFilter').addEventListener('change', function() {
+                filterFindings();
+            });
+            
+            // Search functionality
+            document.getElementById('searchInput').addEventListener('input', function() {
+                filterFindings();
+            });
+            
+            // Print button
+            document.getElementById('printBtn').addEventListener('click', function() {
+                window.print();
+            });
+            
+            // Export to PDF button
+            document.getElementById('exportPdfBtn').addEventListener('click', function() {
+                alert('Export to PDF functionality will be implemented in a future update.');
+                // This would typically use a library like jsPDF or html2pdf.js
+                // to generate a PDF from the current page
+            });
+            
+            // Function to filter findings based on severity and search term
+            function filterFindings() {
+                const severityFilter = document.getElementById('severityFilter').value.toLowerCase();
+                const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+                
+                document.querySelectorAll('.finding-card').forEach(card => {
+                    const severity = card.getAttribute('data-severity');
+                    const title = card.getAttribute('data-title');
+                    const description = card.getAttribute('data-description');
+                    
+                    const matchesSeverity = severityFilter === 'all' || severity === severityFilter;
+                    const matchesSearch = searchTerm === '' || 
+                                        title.includes(searchTerm) || 
+                                        description.includes(searchTerm);
+                    
+                    if (matchesSeverity && matchesSearch) {
+                        card.style.display = 'block';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Mobile menu toggle
+            document.querySelectorAll('.navbar-burger').forEach(el => {
+                el.addEventListener('click', () => {
+                    const target = el.dataset.target;
+                    const $target = document.getElementById(target);
+                    
+                    el.classList.toggle('is-active');
+                    $target.classList.toggle('is-active');
+                });
+            });
+        });
+    </script>
+</body>
+</html>

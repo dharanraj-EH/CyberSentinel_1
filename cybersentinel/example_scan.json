@@ -1,0 +1,74 @@
+{
+  "scan_id": "example-scan-2023",
+  "target": "example.com",
+  "ip": "93.184.216.34",
+  "start_time": "2023-11-01T14:30:00Z",
+  "end_time": "2023-11-01T14:35:12Z",
+  "status": "completed",
+  "scan_type": "full",
+  "ports": [
+    {
+      "port": 80,
+      "protocol": "tcp",
+      "state": "open",
+      "service": "http",
+      "version": "nginx/1.19.5",
+      "banner": "HTTP/1.1 200 OK\r\nServer: nginx/1.19.5\r\nDate: Tue, 01 Nov 2023 14:35:10 GMT\r\nContent-Type: text/html\r\nContent-Length: 1256\r\nLast-Modified: Tue, 21 May 2019 20:53:03 GMT\r\nConnection: keep-alive\r\nETag: \"5ce3f4ff-4e8\"\r\nAccept-Ranges: bytes\r\n\r\n<!doctype html>..."
+    },
+    {
+      "port": 443,
+      "protocol": "tcp",
+      "state": "open",
+      "service": "https",
+      "version": "nginx/1.19.5",
+      "tls": {
+        "version": "TLSv1.3",
+        "cipher": "TLS_AES_256_GCM_SHA384",
+        "certificate": {
+          "subject": {
+            "commonName": "www.example.org",
+            "organizationName": "Example, Inc.",
+            "countryName": "US"
+          },
+          "issuer": {
+            "commonName": "Example CA",
+            "organizationName": "Example CA, Inc.",
+            "countryName": "US"
+          },
+          "valid_from": "2023-01-01T00:00:00Z",
+          "valid_until": "2024-01-01T23:59:59Z",
+          "signature_algorithm": "sha256WithRSAEncryption",
+          "key_size": 2048,
+          "serial_number": "1234567890ABCDEF",
+          "subject_alt_name": [
+            "DNS:example.com",
+            "DNS:www.example.com"
+          ]
+        }
+      }
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2023-12345",
+      "severity": "high",
+      "name": "Example Vulnerability in nginx",
+      "description": "An example vulnerability in nginx that could allow remote code execution.",
+      "solution": "Upgrade to nginx 1.20.0 or later.",
+      "cvss_score": 8.1,
+      "cvss_vector": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H",
+      "affected_ports": [80, 443],
+      "references": [
+        "https://example.com/CVE-2023-12345"
+      ]
+    }
+  ],
+  "summary": {
+    "open_ports": 2,
+    "vulnerabilities_found": 1,
+    "high_severity": 1,
+    "medium_severity": 0,
+    "low_severity": 0,
+    "scan_duration_seconds": 312
+  }
+}
