@@ -67,7 +67,7 @@ class PDFReportGenerator:
             'leading': 14,
             'spaceBefore': 8,
             'spaceAfter': 4,
-            'textColor': colors.HexColor('#7f8c8d'
+            'textColor': colors.HexColor('#7f8c8d')
         },
         'normal': {
             'fontName': 'Helvetica',
@@ -158,7 +158,7 @@ class PDFReportGenerator:
             subject: Subject of the report.
             page_size: Page size ('A4' or 'LETTER').
             margin: Page margin in mm.
-        ""
+        """
         self.title = title
         self.author = author
         self.subject = subject

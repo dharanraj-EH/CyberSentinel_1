@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
     QMessageBox, QGroupBox, QFormLayout, QTabWidget, QTextEdit,
     QTreeWidget, QTreeWidgetItem, QComboBox, QCheckBox, QSplitter,
-    QStyle, QApplication, QFileDialog, QListWidget, QListWidgetItem
+    QStyle, QApplication, QFileDialog, QListWidget, QListWidgetItem, QSpinBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QUrl
 from PyQt5.QtGui import QTextCursor, QIcon, QDesktopServices

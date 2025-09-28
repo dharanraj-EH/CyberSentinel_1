@@ -8,7 +8,7 @@ It requires the Nmap binary to be installed on the system.
 import logging
 import subprocess
 import shlex
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Callable
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -52,7 +52,10 @@ class NmapScanner:
         target: str,
         ports: Optional[Union[str, List[int]]] = None,
         arguments: str = '-sV -sS -T4',
-        output_xml: Optional[str] = None
+        output_xml: Optional[str] = None,
+        *,
+        on_output: Optional[Callable[[str], None]] = None,
+        stream: bool = False,
     ) -> Dict:
         """Perform an Nmap scan.
         
@@ -97,25 +100,65 @@ class NmapScanner:
         logger.info(f"Running Nmap command: {' '.join(cmd)}")
         
         try:
-            # Run the command
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=True
-            )
-            
-            # Parse the output
-            if output_xml and Path(output_xml).exists():
-                return self._parse_nmap_xml(output_xml)
+            if stream and on_output is not None:
+                # Stream output line-by-line
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # merge stderr into stdout
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                )
+                collected: List[str] = []
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    line = line.rstrip('\n')
+                    collected.append(line)
+                    try:
+                        on_output(line)
+                    except Exception:
+                        # Never break streaming due to UI callback errors
+                        logger.debug("on_output callback raised, ignoring", exc_info=True)
+                proc.wait()
+                returncode = proc.returncode or 0
+                stdout_text = "\n".join(collected)
+
+                if output_xml and Path(output_xml).exists():
+                    parsed = self._parse_nmap_xml(output_xml)
+                    # Attach the executed command for UI display
+                    parsed['command'] = ' '.join(cmd)
+                    return parsed
+                else:
+                    return {
+                        'command': ' '.join(cmd),
+                        'stdout': stdout_text,
+                        'stderr': '',
+                        'returncode': returncode,
+                    }
             else:
-                return {
-                    'command': ' '.join(cmd),
-                    'stdout': result.stdout,
-                    'stderr': result.stderr,
-                    'returncode': result.returncode
-                }
+                # Run and wait
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
+                
+                # Parse the output
+                if output_xml and Path(output_xml).exists():
+                    parsed = self._parse_nmap_xml(output_xml)
+                    # Attach the executed command for UI display
+                    parsed['command'] = ' '.join(cmd)
+                    return parsed
+                else:
+                    return {
+                        'command': ' '.join(cmd),
+                        'stdout': result.stdout,
+                        'stderr': result.stderr,
+                        'returncode': result.returncode
+                    }
                 
         except subprocess.CalledProcessError as e:
             logger.error(f"Nmap scan failed: {e.stderr}")
@@ -162,7 +205,8 @@ class NmapScanner:
                     'tcpsequence': {},
                     'ipidsequence': {},
                     'tcptssequence': {},
-                    'times': {}
+                    'times': {},
+                    'trace': {}
                 }
                 
                 # Host status
@@ -241,6 +285,42 @@ class NmapScanner:
                             } for osclass in osmatch.findall('osclass')]
                         })
                     host_data['os'] = {'os_matches': os_matches}
+
+                # Uptime
+                uptime = host.find('uptime')
+                if uptime is not None:
+                    host_data['uptime'] = {
+                        'seconds': int(uptime.get('seconds', 0) or 0),
+                        'lastboot': uptime.get('lastboot', '')
+                    }
+
+                # Sequences
+                tcpseq = host.find('tcpsequence')
+                if tcpseq is not None:
+                    host_data['tcpsequence'] = {k: v for k, v in tcpseq.attrib.items()}
+                ipidseq = host.find('ipidsequence')
+                if ipidseq is not None:
+                    host_data['ipidsequence'] = {k: v for k, v in ipidseq.attrib.items()}
+                tcptsseq = host.find('tcptssequence')
+                if tcptsseq is not None:
+                    host_data['tcptssequence'] = {k: v for k, v in tcptsseq.attrib.items()}
+
+                # Times
+                times = host.find('times')
+                if times is not None:
+                    host_data['times'] = {k: v for k, v in times.attrib.items()}
+
+                # Traceroute (topology)
+                trace = host.find('trace')
+                if trace is not None:
+                    hops = []
+                    for hop in trace.findall('hop'):
+                        hops.append({k: v for k, v in hop.attrib.items()})
+                    host_data['trace'] = {
+                        'proto': trace.get('proto', ''),
+                        'port': trace.get('port', ''),
+                        'hops': hops,
+                    }
                 
                 result['hosts'].append(host_data)
             

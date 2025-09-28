@@ -10,12 +10,16 @@ import socket
 import ssl
 import datetime
 import concurrent.futures
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Any
 import logging
 import ipaddress
 from pathlib import Path
 import json
 from enum import Enum
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import rsa, ec
+from cryptography.x509.oid import ExtensionOID
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +74,14 @@ class SSLScanner:
     
     # Known weak ciphers
     WEAK_CIPHERS = [
-        'NULL', 'EXP', 'RC4', 'DES', '3DES', 'MD5', 'ANON', 'ADH', 'AECDH', 'CBC',
-        'CAMELLIA', 'SEED', 'IDEA', 'PSK', 'SRP', 'KRB5', 'ARIA', 'CHACHA20', 'GCM',
-        'CCM', 'POLY1305', 'SHA1', 'SHA256', 'SHA384', 'SHA512', 'AES128', 'AES256',
-        'CAMELLIA128', 'CAMELLIA256', 'ARIA128', 'ARIA256', 'CHACHA20-POLY1305',
-        'AES128-GCM-SHA256', 'AES256-GCM-SHA384', 'CHACHA20-POLY1305-SHA256'
+        # Obsolete/weak or anonymous/export ciphers
+        'NULL', 'EXP', 'RC4', 'DES', '3DES', 'MD5', 'ANON', 'ADH', 'AECDH',
+        # Non-AEAD CBC suites are considered weaker compared to GCM/CHACHA20
+        'CBC',
+        # Legacy algorithms rarely used today
+        'CAMELLIA', 'SEED', 'IDEA', 'RC2',
+        # SHA1 in cipher name indicates non-AEAD HMAC-SHA1
+        'SHA1'
     ]
     
     # Known vulnerable ciphers
@@ -95,6 +102,31 @@ class SSLScanner:
         self.timeout = timeout
         self.max_workers = max_workers
         self.ciphers_info = self._load_ciphers_info()
+    
+    def _load_ciphers_info(self) -> Dict[str, Any]:
+        """Load cipher suite information and classifications.
+        
+        Returns:
+            Dictionary containing cipher information and security classifications.
+        """
+        return {
+            'weak_ciphers': [
+                'NULL', 'aNULL', 'eNULL', 'EXPORT', 'DES', '3DES', 'MD5', 'PSK',
+                'SRP', 'KRB5', 'RC4', 'RC2', 'IDEA', 'SEED', 'ADH', 'AECDH'
+            ],
+            'medium_ciphers': [
+                'AES128', 'CAMELLIA128', 'ARIA128'
+            ],
+            'strong_ciphers': [
+                'AES256', 'CAMELLIA256', 'ARIA256', 'CHACHA20', 'POLY1305'
+            ],
+            'weak_protocols': [
+                'SSLv2', 'SSLv3', 'TLSv1.0', 'TLSv1.1'
+            ],
+            'secure_protocols': [
+                'TLSv1.2', 'TLSv1.3'
+            ]
+        }
     
     def scan(
         self,
@@ -193,60 +225,81 @@ class SSLScanner:
             context = ssl.create_default_context()
             context.check_hostname = True
             context.verify_mode = ssl.CERT_REQUIRED
-            
+
             with socket.create_connection((hostname, port), self.timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                    cert = ssock.getpeercert()
+                    der = ssock.getpeercert(binary_form=True)
                     cipher = ssock.cipher()
-                    
-                    # Get certificate expiration
-                    not_before = datetime.datetime.strptime(
-                        cert['notBefore'],
-                        '%b %d %H:%M:%S %Y %Z'
-                    )
-                    not_after = datetime.datetime.strptime(
-                        cert['notAfter'],
-                        '%b %d %H:%M:%S %Y %Z'
-                    )
-                    
-                    # Check if certificate is expired or will expire soon
+
+                    cert = x509.load_der_x509_certificate(der, default_backend())
                     now = datetime.datetime.now()
+                    not_before = cert.not_valid_before
+                    not_after = cert.not_valid_after
                     expires_in = (not_after - now).days
                     is_expired = now > not_after
-                    is_expiring_soon = 0 < expires_in <= 30  # 30 days threshold
-                    
-                    # Get subject and issuer information
-                    subject = {k: v for k, v in cert['subject']}
-                    issuer = {k: v for k, v in cert['issuer']}
-                    
-                    # Get SANs (Subject Alternative Names)
-                    san = []
-                    for ext in cert.get('subjectAltName', []):
-                        san.append(f"{ext[0]}: {ext[1]}")
-                    
+                    is_expiring_soon = 0 < expires_in <= 30
+
+                    subject_dict = {attr.oid._name: attr.value for attr in cert.subject}
+                    issuer_dict = {attr.oid._name: attr.value for attr in cert.issuer}
+
+                    # SANs
+                    san_list: List[str] = []
+                    hostname_matches = False
+                    try:
+                        san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+                        dns_names = san.get_values_for_type(x509.DNSName)
+                        ip_names = [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+                        san_list = [*dns_names, *ip_names]
+                        # simple match
+                        for name in dns_names:
+                            if _hostname_matches(hostname, name):
+                                hostname_matches = True
+                                break
+                        if not hostname_matches and hostname in ip_names:
+                            hostname_matches = True
+                    except x509.ExtensionNotFound:
+                        san_list = []
+
+                    # Public key details
+                    pubkey = cert.public_key()
+                    key_type = type(pubkey).__name__
+                    key_size = getattr(pubkey, 'key_size', None)
+                    if isinstance(pubkey, ec.EllipticCurvePublicKey):
+                        key_type = f"EC ({pubkey.curve.name})"
+                        key_size = pubkey.key_size
+                    elif isinstance(pubkey, rsa.RSAPublicKey):
+                        key_type = "RSA"
+                    sig_hash = getattr(cert.signature_hash_algorithm, 'name', None)
+
+                    is_self_signed = cert.issuer == cert.subject
+
                     return {
-                        'subject': subject,
-                        'issuer': issuer,
-                        'version': cert.get('version'),
-                        'serial_number': cert.get('serialNumber'),
+                        'subject': subject_dict,
+                        'issuer': issuer_dict,
+                        'version': getattr(cert, 'version', None).name if getattr(cert, 'version', None) else None,
+                        'serial_number': format(cert.serial_number, 'x').upper(),
                         'not_before': not_before.isoformat(),
                         'not_after': not_after.isoformat(),
                         'expires_in_days': expires_in,
                         'is_expired': is_expired,
                         'is_expiring_soon': is_expiring_soon,
-                        'signature_algorithm': cert.get('signature_algorithm', ''),
-                        'subject_alt_name': san,
-                        'ocsp': cert.get('OCSP', []),
-                        'ca_issuers': cert.get('caIssuers', []),
+                        'signature_algorithm': sig_hash or '',
+                        'subject_alt_name': san_list,
+                        'ocsp': [],
+                        'ca_issuers': [],
+                        'public_key_type': key_type,
+                        'key_size': key_size,
+                        'tls_version': ssock.version(),
                         'cipher': {
                             'name': cipher[0],
                             'version': cipher[1],
                             'bits': cipher[2]
                         },
-                        'tls_version': ssock.version(),
-                        'compression': ssock.compression()
+                        'verified': True,
+                        'self_signed': bool(is_self_signed),
+                        'hostname_matches': bool(hostname_matches) if san_list else True,
                     }
-                    
+
         except ssl.SSLError as e:
             if 'CERTIFICATE_VERIFY_FAILED' in str(e):
                 # Certificate verification failed, try to get it anyway without verification
@@ -274,62 +327,71 @@ class SSLScanner:
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            
+
             with socket.create_connection((hostname, port), self.timeout) as sock:
                 with context.wrap_socket(sock, server_hostname=hostname) as ssock:
-                    cert = ssock.getpeercert()
+                    der = ssock.getpeercert(binary_form=True)
                     cipher = ssock.cipher()
-                    
-                    # Get certificate expiration
-                    not_before = datetime.datetime.strptime(
-                        cert['notBefore'],
-                        '%b %d %H:%M:%S %Y %Z'
-                    )
-                    not_after = datetime.datetime.strptime(
-                        cert['notAfter'],
-                        '%b %d %H:%M:%S %Y %Z'
-                    )
-                    
-                    # Check if certificate is expired or will expire soon
+                    cert = x509.load_der_x509_certificate(der, default_backend())
+
                     now = datetime.datetime.now()
+                    not_before = cert.not_valid_before
+                    not_after = cert.not_valid_after
                     expires_in = (not_after - now).days
                     is_expired = now > not_after
-                    is_expiring_soon = 0 < expires_in <= 30  # 30 days threshold
-                    
-                    # Get subject and issuer information
-                    subject = {k: v for k, v in cert['subject']}
-                    issuer = {k: v for k, v in cert['issuer']}
-                    
-                    # Get SANs (Subject Alternative Names)
-                    san = []
-                    for ext in cert.get('subjectAltName', []):
-                        san.append(f"{ext[0]}: {ext[1]}")
-                    
+                    is_expiring_soon = 0 < expires_in <= 30
+
+                    subject_dict = {attr.oid._name: attr.value for attr in cert.subject}
+                    issuer_dict = {attr.oid._name: attr.value for attr in cert.issuer}
+
+                    san_list: List[str] = []
+                    try:
+                        san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
+                        dns_names = san.get_values_for_type(x509.DNSName)
+                        ip_names = [str(ip) for ip in san.get_values_for_type(x509.IPAddress)]
+                        san_list = [*dns_names, *ip_names]
+                    except x509.ExtensionNotFound:
+                        pass
+
+                    pubkey = cert.public_key()
+                    key_type = type(pubkey).__name__
+                    key_size = getattr(pubkey, 'key_size', None)
+                    if isinstance(pubkey, ec.EllipticCurvePublicKey):
+                        key_type = f"EC ({pubkey.curve.name})"
+                        key_size = pubkey.key_size
+                    elif isinstance(pubkey, rsa.RSAPublicKey):
+                        key_type = "RSA"
+                    sig_hash = getattr(cert.signature_hash_algorithm, 'name', None)
+                    is_self_signed = cert.issuer == cert.subject
+
                     return {
-                        'subject': subject,
-                        'issuer': issuer,
-                        'version': cert.get('version'),
-                        'serial_number': cert.get('serialNumber'),
+                        'subject': subject_dict,
+                        'issuer': issuer_dict,
+                        'version': getattr(cert, 'version', None).name if getattr(cert, 'version', None) else None,
+                        'serial_number': format(cert.serial_number, 'x').upper(),
                         'not_before': not_before.isoformat(),
                         'not_after': not_after.isoformat(),
                         'expires_in_days': expires_in,
                         'is_expired': is_expired,
                         'is_expiring_soon': is_expiring_soon,
-                        'signature_algorithm': cert.get('signature_algorithm', ''),
-                        'subject_alt_name': san,
-                        'ocsp': cert.get('OCSP', []),
-                        'ca_issuers': cert.get('caIssuers', []),
+                        'signature_algorithm': sig_hash or '',
+                        'subject_alt_name': san_list,
+                        'ocsp': [],
+                        'ca_issuers': [],
+                        'public_key_type': key_type,
+                        'key_size': key_size,
+                        'tls_version': ssock.version(),
                         'cipher': {
                             'name': cipher[0],
                             'version': cipher[1],
                             'bits': cipher[2]
                         },
-                        'tls_version': ssock.version(),
-                        'compression': ssock.compression(),
                         'verification_error': 'Certificate verification failed (untrusted/self-signed)',
-                        'verified': False
+                        'verified': False,
+                        'self_signed': bool(is_self_signed),
+                        'hostname_matches': None,
                     }
-                    
+
         except Exception as e:
             logger.error(f"Error getting unverified certificate: {e}")
             return {'error': str(e), 'verified': False}
@@ -351,22 +413,21 @@ class SSLScanner:
             Tuple of (is_supported, list_of_supported_ciphers)
         """
         try:
-            # Map protocol string to ssl.PROTOCOL_* constant
+            # Map protocol string to ssl.PROTOCOL_* constant (compat with newer Python)
             protocol_map = {
-                'SSLv2': ssl.PROTOCOL_SSLv2,
-                'SSLv3': ssl.PROTOCOL_SSLv3,
-                'TLSv1.0': ssl.PROTOCOL_TLSv1,
-                'TLSv1.1': ssl.PROTOCOL_TLSv1_1,
-                'TLSv1.2': ssl.PROTOCOL_TLSv1_2,
-                'TLSv1.3': ssl.PROTOCOL_TLS
+                'SSLv2': getattr(ssl, 'PROTOCOL_SSLv2', None),
+                'SSLv3': getattr(ssl, 'PROTOCOL_SSLv3', None),
+                'TLSv1.0': getattr(ssl, 'PROTOCOL_TLSv1', getattr(ssl, 'PROTOCOL_TLS', ssl.PROTOCOL_TLS)),
+                'TLSv1.1': getattr(ssl, 'PROTOCOL_TLSv1_1', getattr(ssl, 'PROTOCOL_TLS', ssl.PROTOCOL_TLS)),
+                'TLSv1.2': getattr(ssl, 'PROTOCOL_TLSv1_2', getattr(ssl, 'PROTOCOL_TLS', ssl.PROTOCOL_TLS)),
+                'TLSv1.3': getattr(ssl, 'PROTOCOL_TLS', ssl.PROTOCOL_TLS)
             }
             
             if protocol not in protocol_map:
                 raise ValueError(f"Unsupported protocol: {protocol}")
             
-            # Skip SSLv2/3 if not available
-            if (protocol == 'SSLv2' and not hasattr(ssl, 'PROTOCOL_SSLv2')) or \
-               (protocol == 'SSLv3' and not hasattr(ssl, 'PROTOCOL_SSLv3')):
+            # Skip if protocol implementation is unavailable
+            if protocol_map[protocol] is None:
                 return False, []
             
             context = ssl.SSLContext(protocol_map[protocol])
@@ -468,7 +529,7 @@ class SSLScanner:
         vulnerabilities = []
         
         # Check for expired or soon-to-expire certificate
-        if 'certificate' in result and result.certificate and 'is_expired' in result.certificate:
+        if result.certificate and 'is_expired' in result.certificate:
             if result.certificate['is_expired']:
                 vulnerabilities.append({
                     'id': 'cert_expired',
@@ -486,8 +547,8 @@ class SSLScanner:
                     'remediation': 'Renew the certificate before it expires.'
                 })
         
-        # Check for self-signed certificates
-        if 'certificate' in result and result.certificate and 'verified' in result.certificate and not result.certificate['verified']:
+        # Check for self-signed/unverified certificates
+        if result.certificate and ('verified' in result.certificate) and not result.certificate['verified']:
             vulnerabilities.append({
                 'id': 'self_signed_cert',
                 'severity': 'medium',
@@ -531,24 +592,24 @@ class SSLScanner:
         
         # Check for common vulnerabilities
         if 'TLSv1.2' in result.protocols and result.protocols['TLSv1.2'].get('supported', False):
-            # Check for POODLE (CVE-2014-3566)
-            if any('CBC' in cipher and 'SHA' in cipher for cipher in result.protocols['TLSv1.2'].get('ciphers', [])):
+            # Check for POODLE (in TLS context, misconfiguration leading to CBC issues is rare; treat as informational check)
+            if any(('CBC' in c.get('name','')) and ('SHA' in c.get('name','')) for c in result.protocols['TLSv1.2'].get('ciphers', [])):
                 vulnerabilities.append({
                     'id': 'poodle_tls',
-                    'severity': 'high',
-                    'name': 'POODLE (CVE-2014-3566)',
-                    'description': 'The server is vulnerable to the POODLE attack (CVE-2014-3566) which could allow man-in-the-middle attackers to obtain sensitive information.',
-                    'remediation': 'Disable SSLv3 and CBC cipher suites in TLS 1.0-1.2.'
+                    'severity': 'medium',
+                    'name': 'CBC ciphers in TLS 1.2',
+                    'description': 'CBC ciphers detected under TLS 1.2. Consider preferring AEAD ciphers (GCM/CHACHA20-POLY1305).',
+                    'remediation': 'Prefer TLS 1.2 AEAD ciphers or TLS 1.3 where possible.'
                 })
             
-            # Check for BEAST (CVE-2011-3389)
-            if any('CBC' in cipher['name'] for cipher in result.protocols['TLSv1.2'].get('ciphers', [])):
+            # Check for BEAST (relevant to TLS 1.0 clients, but flag if CBC offered)
+            if any('CBC' in c.get('name','') for c in result.protocols['TLSv1.0'].get('ciphers', []) if result.protocols.get('TLSv1.0',{}).get('supported',False)):
                 vulnerabilities.append({
                     'id': 'beast',
                     'severity': 'medium',
-                    'name': 'BEAST (CVE-2011-3389)',
-                    'description': 'The server is vulnerable to the BEAST attack (CVE-2011-3389) which could allow man-in-the-middle attackers to obtain sensitive information.',
-                    'remediation': 'Disable CBC cipher suites in TLS 1.0-1.2 or enable TLS 1.3.'
+                    'name': 'BEAST (CVE-2011-3389) risk',
+                    'description': 'CBC cipher suites offered under TLS 1.0 can expose BEAST risk for legacy clients.',
+                    'remediation': 'Disable TLS 1.0 or ensure clients use 1/n-1 splitting mitigations; prefer TLS 1.2+.'
                 })
         
         # Check for Heartbleed (CVE-2014-0160)
@@ -562,31 +623,77 @@ class SSLScanner:
                     'remediation': 'Upgrade OpenSSL to version 1.0.1g or later and reissue all certificates.'
                 })
         
+        # Certificate-specific vulnerabilities (signature/hash, key size, SAN, hostname)
+        cert = result.certificate or {}
+        if cert:
+            sig = str(cert.get('signature_algorithm') or '').lower()
+            if sig in ('md2', 'md4', 'md5'):
+                vulnerabilities.append({
+                    'id': 'weak_signature_md5',
+                    'severity': 'high',
+                    'name': f'Weak signature algorithm ({sig.upper()})',
+                    'description': f'The certificate is signed using the weak hash algorithm {sig.upper()}.',
+                    'remediation': 'Reissue the certificate using SHA-256 or stronger (e.g., SHA-256/384).'
+                })
+            elif sig == 'sha1':
+                vulnerabilities.append({
+                    'id': 'weak_signature_sha1',
+                    'severity': 'medium',
+                    'name': 'Weak signature algorithm (SHA-1)',
+                    'description': 'The certificate is signed using SHA-1 which is deprecated.',
+                    'remediation': 'Reissue the certificate using SHA-256 or stronger.'
+                })
+
+            pk_type = str(cert.get('public_key_type') or '')
+            key_size = cert.get('key_size') or 0
+            if 'RSA' in pk_type and key_size and key_size < 2048:
+                vulnerabilities.append({
+                    'id': 'weak_rsa_key',
+                    'severity': 'high',
+                    'name': f'Weak RSA key size ({key_size} bits)',
+                    'description': 'RSA key size is smaller than 2048 bits.',
+                    'remediation': 'Generate a new RSA key with at least 2048 bits (preferably 3072+).'
+                })
+            if pk_type.startswith('EC') and key_size and key_size < 224:
+                vulnerabilities.append({
+                    'id': 'weak_ec_key',
+                    'severity': 'medium',
+                    'name': f'Weak EC key size ({key_size} bits)',
+                    'description': 'Elliptic Curve key size is smaller than recommended.',
+                    'remediation': 'Use curves like P-256, P-384, or P-521.'
+                })
+
+            san = cert.get('subject_alt_name', [])
+            if san == []:
+                vulnerabilities.append({
+                    'id': 'missing_san',
+                    'severity': 'low',
+                    'name': 'Certificate missing SAN',
+                    'description': 'The certificate does not contain a Subject Alternative Name (SAN) extension.',
+                    'remediation': 'Include SAN entries (DNS/IP) in the certificate per current standards.'
+                })
+
+            if cert.get('hostname_matches') is False:
+                vulnerabilities.append({
+                    'id': 'hostname_mismatch',
+                    'severity': 'high',
+                    'name': 'Hostname mismatch',
+                    'description': 'The hostname does not match any certificate SANs or CN.',
+                    'remediation': 'Reissue the certificate for the correct hostname(s).'
+                })
+
         return vulnerabilities
-    
-    def _load_ciphers_info(self) -> Dict:
-        """Load information about ciphers from a local database.
-        
-        Returns:
-            Dictionary containing cipher information.
-        """
-        # In a real implementation, this would load cipher information from a file
-        # or database. For now, we'll return an empty dictionary.
-        return {}
-    
-    def _reverse_lookup(self, ip: str) -> Optional[str]:
-        """Perform a reverse DNS lookup.
-        
-        Args:
-            ip: IP address to look up.
-            
-        Returns:
-            Hostname if found, None otherwise.
-        """
-        try:
-            return socket.gethostbyaddr(ip)[0]
-        except (socket.herror, socket.gaierror):
-            return None
+
+# --- helpers ---
+def _hostname_matches(host: str, pattern: str) -> bool:
+    """Basic wildcard hostname match to evaluate SAN patterns like *.example.com"""
+    host = host.lower()
+    pattern = pattern.lower()
+    if pattern.startswith('*.'):
+        # wildcard matches one level
+        suffix = pattern[1:]
+        return host.endswith(suffix) and host.count('.') >= pattern.count('.')
+    return host == pattern
 
 # Example usage
 if __name__ == "__main__":

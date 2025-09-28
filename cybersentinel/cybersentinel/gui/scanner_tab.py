@@ -2,20 +2,32 @@
 Scanner tab for the CyberSentinel application.
 """
 import logging
+import tempfile
 from typing import Dict, List, Any, Optional
+from datetime import datetime
+from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
     QMessageBox, QGroupBox, QCheckBox, QFormLayout, QSpinBox, QSplitter,
-    QTextEdit, QFileDialog, QTabWidget, QStyle, QApplication
+    QTextEdit, QFileDialog, QTabWidget, QStyle, QApplication,
+    QTreeWidget, QTreeWidgetItem
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
-from PyQt5.QtGui import QTextCursor, QIcon
+from PyQt5.QtGui import QTextCursor, QIcon, QColor
 
 from ..scanner.nmap_wrapper import NmapScanner
 from ..scanner.socket_scanner import SocketScanner
 from ..utils.resource_loader import load_icon
+from ..reporting.json_report import JSONReportGenerator
+try:
+    from ..reporting.html_report import HTMLReportGenerator
+    HAS_HTML = True
+except Exception:
+    HTMLReportGenerator = None  # type: ignore
+    HAS_HTML = False
+from ..reporting.pdf_report import PDFReportGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +41,7 @@ class ScanWorker(QThread):
     progress_updated = pyqtSignal(int, str)
     scan_completed = pyqtSignal(dict)
     error_occurred = pyqtSignal(str)
+    output_line = pyqtSignal(str)
     
     def __init__(self, target: str, scan_type: str, options: Dict[str, Any], parent=None):
         super().__init__(parent)
@@ -46,11 +59,68 @@ class ScanWorker(QThread):
             if self.scan_type == "nmap":
                 scanner = NmapScanner()
                 self.progress_updated.emit(10, "Starting Nmap scan...")
-                results = scanner.scan(self.target, self.options.get("ports", "1-1024"))
+
+                # Build Nmap arguments from options to mirror detailed CLI output
+                args: List[str] = ["-sS", "-v"]
+                if self.options.get("service_scan"):
+                    args.append("-sV")
+                if self.options.get("os_detection"):
+                    args.append("-O")
+                if self.options.get("aggressive"):
+                    args.append("-A")
+                timing = self.options.get("timing")
+                if isinstance(timing, int):
+                    args.append(f"-T{timing}")
+                if self.options.get("script_scan"):
+                    script_arg = self.options.get("script_args") or "default"
+                    args.append(f"--script={script_arg}")
+                arguments = " ".join(args)
+
+                # Create temporary XML output path for structured parsing
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp:
+                    xml_path = tmp.name
+
+                # Stream output lines into the GUI
+                def on_out(line: str):
+                    self.output_line.emit(line)
+
+                nmap_raw = scanner.scan(
+                    self.target,
+                    self.options.get("ports", "1-1024"),
+                    arguments=arguments,
+                    output_xml=xml_path,
+                    stream=True,
+                    on_output=on_out,
+                )
+
+                # If parsed XML available, flatten ports for the table view
+                table_results: Dict[str, Any] = {"ports": []}
+                hosts = nmap_raw.get("hosts", []) if isinstance(nmap_raw, dict) else []
+                for host in hosts:
+                    for p in host.get("ports", []):
+                        state = p.get("state", {}).get("state", "")
+                        service = p.get("service", {})
+                        version = " ".join(filter(None, [service.get("product"), service.get("version")])).strip()
+                        table_results["ports"].append(
+                            {
+                                "port": p.get("port"),
+                                "protocol": p.get("protocol", "tcp"),
+                                "state": state,
+                                "service": service.get("name") or service.get("product") or "",
+                                "version": version,
+                            }
+                        )
+                results = {"ports": table_results["ports"], "nmap": nmap_raw}
             else:
                 scanner = SocketScanner()
                 self.progress_updated.emit(10, "Starting socket scan...")
-                results = scanner.scan(self.target, self.options.get("ports", [80, 443, 8080, 22, 21, 25, 110, 143, 443, 993, 995, 3306, 3389]))
+                results = scanner.scan(
+                    self.target,
+                    self.options.get(
+                        "ports",
+                        [80, 443, 8080, 22, 21, 25, 110, 143, 443, 993, 995, 3306, 3389],
+                    ),
+                )
             
             self.progress_updated.emit(90, "Processing results...")
             self.scan_completed.emit(results)
@@ -77,6 +147,7 @@ class ScannerTab(QWidget):
         super().__init__(parent)
         self.scan_worker = None
         self.scan_results = {}
+        self.transcript_lines: List[str] = []
         self._init_ui()
     
     def _init_ui(self):
@@ -125,9 +196,25 @@ class ScannerTab(QWidget):
         self.scanner_type.addItem("Nmap (recommended)", "nmap")
         self.scanner_type.addItem("Built-in Socket Scanner", "socket")
         
-        # Port range
+        # Port range + presets
         self.port_range = QLineEdit("1-1024")
         self.port_range.setToolTip("Ports to scan (e.g., 80,443,8080 or 1-1000)")
+        self.port_presets = QComboBox()
+        self.port_presets.addItem("Custom", None)
+        self.port_presets.addItem("Well-known (0-1023)", "0-1023")
+        self.port_presets.addItem("Registered (1024-49151)", "1024-49151")
+        self.port_presets.addItem("Dynamic/Ephemeral (49152-65535)", "49152-65535")
+        self.port_presets.addItem("All (1-65535)", "1-65535")
+        self.port_presets.setCurrentIndex(0)
+        self.port_presets.setToolTip("Select a common port range preset or choose Custom to enter your own")
+        self.port_presets.currentIndexChanged.connect(self._on_port_preset_changed)
+
+        port_row = QWidget()
+        port_row_layout = QHBoxLayout(port_row)
+        port_row_layout.setContentsMargins(0, 0, 0, 0)
+        port_row_layout.setSpacing(8)
+        port_row_layout.addWidget(self.port_range, 1)
+        port_row_layout.addWidget(self.port_presets)
         
         # Scan type
         self.scan_type = QComboBox()
@@ -160,7 +247,7 @@ class ScannerTab(QWidget):
         
         # Add options to layout
         options_layout.addRow("Scanner:", self.scanner_type)
-        options_layout.addRow("Ports:", self.port_range)
+        options_layout.addRow("Ports:", port_row)
         options_layout.addRow("Scan Type:", self.scan_type)
         options_layout.addRow("Timing:", self.timing)
         options_layout.addRow(self.service_scan)
@@ -182,26 +269,45 @@ class ScannerTab(QWidget):
         top_layout.addWidget(options_group)
         top_layout.addWidget(self.progress_bar)
         
-        # Bottom panel: Results
+        # Bottom panel: multi-tab (Nmap Output, Ports/Hosts, Topology, Host Details, Scans)
         bottom_panel = QTabWidget()
-        
-        # Results table
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(5)
-        self.results_table.setHorizontalHeaderLabels(["Port", "Protocol", "State", "Service", "Version"])
-        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.results_table.horizontalHeader().setStretchLastSection(True)
-        self.results_table.verticalHeader().setVisible(False)
-        
-        # Output console
-        self.output_console = QTextEdit()
-        self.output_console.setReadOnly(True)
-        self.output_console.setFontFamily("Courier")
-        self.output_console.setLineWrapMode(QTextEdit.NoWrap)
-        
+
+        # Nmap Output (live streaming)
+        self.nmap_output_console = QTextEdit()
+        self.nmap_output_console.setReadOnly(True)
+        self.nmap_output_console.setFontFamily("Courier")
+        self.nmap_output_console.setLineWrapMode(QTextEdit.NoWrap)
+
+        # Ports / Hosts table
+        self.ports_table = QTableWidget()
+        self.ports_table.setColumnCount(5)
+        self.ports_table.setHorizontalHeaderLabels(["Port", "Protocol", "State", "Service", "Version"])
+        self.ports_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.ports_table.horizontalHeader().setStretchLastSection(True)
+        self.ports_table.verticalHeader().setVisible(False)
+
+        # Topology (traceroute hops)
+        self.topology_tree = QTreeWidget()
+        self.topology_tree.setHeaderLabels(["Hop", "RTT", "Address"])
+        self.topology_tree.setColumnWidth(0, 80)
+        self.topology_tree.setColumnWidth(1, 120)
+
+        # Host Details (status, addresses, hostnames, uptime, sequences)
+        self.host_details_tree = QTreeWidget()
+        self.host_details_tree.setHeaderLabels(["Property", "Value"])
+        self.host_details_tree.setColumnWidth(0, 220)
+
+        # Scans (command, summary)
+        self.scans_text = QTextEdit()
+        self.scans_text.setReadOnly(True)
+        self.scans_text.setFontFamily("Courier")
+
         # Add tabs
-        bottom_panel.addTab(self.results_table, "Results")
-        bottom_panel.addTab(self.output_console, "Output")
+        bottom_panel.addTab(self.nmap_output_console, "Nmap Output")
+        bottom_panel.addTab(self.ports_table, "Ports / Hosts")
+        bottom_panel.addTab(self.topology_tree, "Topology")
+        bottom_panel.addTab(self.host_details_tree, "Host Details")
+        bottom_panel.addTab(self.scans_text, "Scans")
         
         # Add panels to splitter
         splitter.addWidget(top_panel)
@@ -212,6 +318,12 @@ class ScannerTab(QWidget):
         
         # Add splitter to main layout
         main_layout.addWidget(splitter)
+    
+    def _on_port_preset_changed(self, index: int):
+        """Update port range when a preset is selected."""
+        preset = self.port_presets.itemData(index)
+        if preset:
+            self.port_range.setText(str(preset))
     
     def start_scan(self):
         """Start the scan with the current settings."""
@@ -233,8 +345,8 @@ class ScannerTab(QWidget):
         }
         
         # Clear previous results
-        self.results_table.setRowCount(0)
-        self.output_console.clear()
+        self.ports_table.setRowCount(0)
+        self.nmap_output_console.clear()
         self.append_output(f"Starting {self.scanner_type.currentText()} scan on {target}...\n")
         
         # Update UI
@@ -252,6 +364,7 @@ class ScannerTab(QWidget):
         self.scan_worker.progress_updated.connect(self.update_progress)
         self.scan_worker.scan_completed.connect(self.on_scan_completed)
         self.scan_worker.error_occurred.connect(self.on_scan_error)
+        self.scan_worker.output_line.connect(self.on_output_line)
         
         # Start the scan
         self.scan_worker.start()
@@ -278,6 +391,19 @@ class ScannerTab(QWidget):
             self.scan_results = results
             self.display_results(results)
             self.append_output("\nScan completed successfully!")
+
+            # Persist results and transcript as a report under user's home
+            try:
+                self._save_network_report(results)
+            except Exception as persist_err:
+                logger.warning(f"Failed to save network report: {persist_err}")
+            # Ask Dashboard to reload recent scans
+            try:
+                mw = self.window()
+                if mw and hasattr(mw, 'dashboard_tab') and hasattr(mw.dashboard_tab, 'reload_recent_scans'):
+                    mw.dashboard_tab.reload_recent_scans()
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Error processing scan results: {e}", exc_info=True)
             self.append_output(f"\nError processing results: {e}")
@@ -298,30 +424,132 @@ class ScannerTab(QWidget):
     def display_results(self, results: Dict):
         """Display the scan results in the table."""
         try:
-            if not results or "ports" not in results or not results["ports"]:
-                self.append_output("No open ports found.")
-                return
-            
-            # Clear existing rows
-            self.results_table.setRowCount(0)
-            
-            # Add results to the table
-            for port_info in results["ports"]:
-                if port_info.get("state") == "open":
-                    row = self.results_table.rowCount()
-                    self.results_table.insertRow(row)
-                    
-                    self.results_table.setItem(row, 0, QTableWidgetItem(str(port_info.get("port", ""))))
-                    self.results_table.setItem(row, 1, QTableWidgetItem(port_info.get("protocol", "tcp").upper()))
-                    self.results_table.setItem(row, 2, QTableWidgetItem(port_info.get("state", "").title()))
-                    self.results_table.setItem(row, 3, QTableWidgetItem(port_info.get("service", "unknown")))
-                    self.results_table.setItem(row, 4, QTableWidgetItem(port_info.get("version", "")))
-            
-            # Resize columns to content
-            self.results_table.resizeColumnsToContents()
-            
-            # Show summary
-            open_ports = len([p for p in results.get("ports", []) if p.get("state") == "open"])
+            # When Nmap data present, use it to populate all tabs
+            nmap_data = results.get("nmap") if isinstance(results, dict) else None
+
+            # Populate Ports / Hosts table (from flattened list if available or from first host)
+            ports_list = results.get("ports", []) if isinstance(results, dict) else []
+            if not ports_list and nmap_data:
+                # flatten from host 0
+                hosts = nmap_data.get("hosts", [])
+                if hosts:
+                    for p in hosts[0].get("ports", []):
+                        state = p.get("state", {}).get("state", "")
+                        service = p.get("service", {})
+                        version = " ".join(filter(None, [service.get("product"), service.get("version")])).strip()
+                        ports_list.append({
+                            "port": p.get("port"),
+                            "protocol": p.get("protocol", "tcp"),
+                            "state": state,
+                            "service": service.get("name") or service.get("product") or "",
+                            "version": version,
+                        })
+
+            # Clear and populate table
+            self.ports_table.setRowCount(0)
+            for port_info in ports_list:
+                row = self.ports_table.rowCount()
+                self.ports_table.insertRow(row)
+                self.ports_table.setItem(row, 0, QTableWidgetItem(str(port_info.get("port", ""))))
+                self.ports_table.setItem(row, 1, QTableWidgetItem(port_info.get("protocol", "tcp").lower()))
+                state_str = str(port_info.get("state", ""))
+                state_item = QTableWidgetItem(state_str)
+                if state_str == "open":
+                    state_item.setForeground(QColor("#2ecc71"))  # green
+                elif state_str == "closed":
+                    state_item.setForeground(QColor("#e74c3c"))  # red
+                elif state_str == "filtered":
+                    state_item.setForeground(QColor("#f1c40f"))  # yellow
+                self.ports_table.setItem(row, 2, state_item)
+                self.ports_table.setItem(row, 3, QTableWidgetItem(port_info.get("service", "")))
+                self.ports_table.setItem(row, 4, QTableWidgetItem(port_info.get("version", "")))
+
+            self.ports_table.resizeColumnsToContents()
+
+            # Populate Host Details
+            self.host_details_tree.clear()
+            if nmap_data and nmap_data.get("hosts"):
+                host = nmap_data["hosts"][0]
+                root_item = QTreeWidgetItem([self.target_input.text().strip()])
+                self.host_details_tree.addTopLevelItem(root_item)
+
+                # Host Status
+                status_item = QTreeWidgetItem(["Host Status"]) 
+                state = host.get("status", {}).get("state", "unknown")
+                status_item.addChild(QTreeWidgetItem(["State:", state]))
+                # Port counts
+                ports = host.get("ports", [])
+                open_cnt = sum(1 for p in ports if p.get("state", {}).get("state") == "open")
+                closed_cnt = sum(1 for p in ports if p.get("state", {}).get("state") == "closed")
+                filtered_cnt = sum(1 for p in ports if p.get("state", {}).get("state") == "filtered")
+                status_item.addChild(QTreeWidgetItem(["Open ports:", str(open_cnt)]))
+                status_item.addChild(QTreeWidgetItem(["Filtered ports:", str(filtered_cnt)]))
+                status_item.addChild(QTreeWidgetItem(["Closed ports:", str(closed_cnt)]))
+                status_item.addChild(QTreeWidgetItem(["Scanned ports:", str(len(ports))]))
+                # Uptime
+                up = host.get("uptime", {})
+                if up:
+                    status_item.addChild(QTreeWidgetItem(["Up time:", str(up.get("seconds", ""))]))
+                    status_item.addChild(QTreeWidgetItem(["Last boot:", up.get("lastboot", "")]))
+                root_item.addChild(status_item)
+
+                # Addresses
+                addr_item = QTreeWidgetItem(["Addresses"]) 
+                for a in host.get("addresses", []):
+                    addr_item.addChild(QTreeWidgetItem([a.get("addrtype", "addr"), a.get("addr", "")]))
+                root_item.addChild(addr_item)
+
+                # Hostnames
+                hn_item = QTreeWidgetItem(["Hostnames"]) 
+                for hn in host.get("hostnames", []):
+                    hn_item.addChild(QTreeWidgetItem([hn.get("type", "name"), hn.get("name", "")]))
+                root_item.addChild(hn_item)
+
+                # Sequences
+                seq_item = QTreeWidgetItem(["TCP Sequence"]) 
+                for k, v in host.get("tcpsequence", {}).items():
+                    seq_item.addChild(QTreeWidgetItem([k, str(v)]))
+                root_item.addChild(seq_item)
+                ipid_item = QTreeWidgetItem(["IP ID Sequence"]) 
+                for k, v in host.get("ipidsequence", {}).items():
+                    ipid_item.addChild(QTreeWidgetItem([k, str(v)]))
+                root_item.addChild(ipid_item)
+                tcpts_item = QTreeWidgetItem(["TCP TS Sequence"]) 
+                for k, v in host.get("tcptssequence", {}).items():
+                    tcpts_item.addChild(QTreeWidgetItem([k, str(v)]))
+                root_item.addChild(tcpts_item)
+
+                # Times
+                times = host.get("times", {})
+                if times:
+                    times_item = QTreeWidgetItem(["Times"]) 
+                    for k, v in times.items():
+                        times_item.addChild(QTreeWidgetItem([k, str(v)]))
+                    root_item.addChild(times_item)
+
+                self.host_details_tree.expandAll()
+
+            # Populate Topology
+            self.topology_tree.clear()
+            if nmap_data and nmap_data.get("hosts"):
+                host = nmap_data["hosts"][0]
+                trace = host.get("trace", {})
+                if trace and trace.get("hops"):
+                    for hop in trace["hops"]:
+                        hopnum = hop.get("ttl") or hop.get("hop") or ""
+                        rtt = hop.get("rtt", "")
+                        addr = hop.get("ipaddr") or hop.get("host") or hop.get("hostname") or ""
+                        self.topology_tree.addTopLevelItem(QTreeWidgetItem([str(hopnum), str(rtt), str(addr)]))
+
+            # Populate Scans info
+            self.scans_text.clear()
+            if nmap_data and nmap_data.get("command"):
+                self.scans_text.append(f"Command: {nmap_data['command']}")
+            elif isinstance(results, dict) and results.get("command"):
+                self.scans_text.append(f"Command: {results['command']}")
+
+            # Summary message
+            open_ports = len([p for p in ports_list if str(p.get("state")) == "open"])
             self.append_output(f"\nScan complete. Found {open_ports} open ports.")
             
         except Exception as e:
@@ -330,9 +558,15 @@ class ScannerTab(QWidget):
     
     def append_output(self, text: str):
         """Append text to the output console."""
-        self.output_console.moveCursor(QTextCursor.End)
-        self.output_console.insertPlainText(text + "\n")
-        self.output_console.moveCursor(QTextCursor.End)
+        self.nmap_output_console.moveCursor(QTextCursor.End)
+        self.nmap_output_console.insertPlainText(text + "\n")
+        self.nmap_output_console.moveCursor(QTextCursor.End)
+        # Keep transcript for saving
+        self.transcript_lines.append(text)
+
+    def on_output_line(self, text: str):
+        """Receive a live output line from the scan worker and append it."""
+        self.append_output(text)
     
     def save_results(self):
         """Save the scan results to a file."""
@@ -358,3 +592,75 @@ class ScannerTab(QWidget):
             except Exception as e:
                 logger.error(f"Error saving results: {e}", exc_info=True)
                 QMessageBox.critical(self, "Error", f"Failed to save results:\n{e}")
+
+    # --- Internal helpers ---
+    def _save_network_report(self, results: Dict[str, Any]) -> None:
+        """Save network scan results and transcript to user's reports directory and generate reports."""
+        target = self.target_input.text().strip() or "target"
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        root = Path.home() / ".cybersentinel" / "reports" / "network" / f"{target.replace(':','-').replace('/','_')}_{ts}"
+        root.mkdir(parents=True, exist_ok=True)
+
+        # Build findings from ports
+        ports = results.get("ports", [])
+        findings: List[Dict[str, Any]] = []
+        for p in ports:
+            state = str(p.get("state", "")).lower()
+            if state == "open":
+                sev = "low"
+                title = f"Open Port {p.get('port')}/{p.get('protocol','tcp').lower()}"
+                service = p.get("service", "")
+                version = p.get("version", "")
+                desc = f"Service: {service} {version}".strip()
+                findings.append({
+                    "id": f"NET-{len(findings)+1:03d}",
+                    "title": title,
+                    "severity": sev,
+                    "description": desc,
+                    "impact": "Accessible network service may increase attack surface.",
+                    "recommendation": "Review necessity of the service, restrict exposure with firewall, and keep it patched.",
+                    "evidence": "",
+                })
+
+        # Summaries
+        severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "unknown": 0}
+        for f in findings:
+            s = str(f.get("severity", "unknown")).lower()
+            severity_counts[s] = severity_counts.get(s, 0) + 1
+
+        payload: Dict[str, Any] = {
+            "scan_id": f"network-{ts}",
+            "target": target,
+            "scan_type": "network_nmap",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "parameters": {},
+            "findings": findings,
+            "summary": {
+                "total_findings": len(findings),
+                "severity_counts": severity_counts,
+            },
+            "nmap": results.get("nmap", {}),
+            "ports_table": ports,
+        }
+
+        # Save transcript
+        try:
+            (root / "nmap_output.txt").write_text("\n".join(self.transcript_lines), encoding="utf-8")
+        except Exception:
+            pass
+
+        # Generate JSON
+        JSONReportGenerator(pretty_print=True).generate(payload, root / "report.json")
+
+        # Generate HTML if available
+        if HAS_HTML and HTMLReportGenerator is not None:
+            try:
+                HTMLReportGenerator().generate(payload, root / "report.html")
+            except Exception as e:
+                logger.warning(f"Failed HTML report: {e}")
+
+        # Generate PDF
+        try:
+            PDFReportGenerator(title="CyberSentinel Network Scan Report").generate(payload, root / "report.pdf")
+        except Exception as e:
+            logger.warning(f"Failed PDF report: {e}")

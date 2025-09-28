@@ -7,8 +7,11 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QScrollArea, QSizePolicy
 )
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QPixmap, QIcon, QFont
+from PyQt5.QtCore import Qt, QSize, QUrl
+from PyQt5.QtGui import QPixmap, QIcon, QFont, QDesktopServices
+from pathlib import Path
+from datetime import datetime
+import json
 
 from ..utils.resource_loader import load_icon
 
@@ -35,8 +38,8 @@ class DashboardTab(QWidget):
         main_layout.addWidget(quick_actions)
         
         # Recent scans section
-        recent_scans = self._create_recent_scans()
-        main_layout.addWidget(recent_scans)
+        self.recent_scans_frame = self._create_recent_scans()
+        main_layout.addWidget(self.recent_scans_frame)
         
         # Status section
         status_section = self._create_status_section()
@@ -73,11 +76,19 @@ class DashboardTab(QWidget):
         subtitle_font = QFont()
         subtitle_font.setPointSize(12)
         subtitle_label.setFont(subtitle_font)
+
+        # Project credit
+        project_label = QLabel("M DHARAN RAJ · Final Year Project")
+        project_font = QFont()
+        project_font.setPointSize(11)
+        project_font.setBold(True)
+        project_label.setFont(project_font)
         
         # Create a vertical layout for the title and subtitle
         title_layout = QVBoxLayout()
         title_layout.addWidget(title_label)
         title_layout.addWidget(subtitle_label)
+        title_layout.addWidget(project_label)
         
         # Add widgets to the main layout
         layout.addWidget(logo_label, 0, Qt.AlignLeft | Qt.AlignTop)
@@ -85,6 +96,49 @@ class DashboardTab(QWidget):
         layout.addLayout(title_layout, 1)
         
         return frame
+
+    def _get_recent_reports(self) -> list:
+        """Collect recent reports from ~/.cybersentinel/reports/* and return summaries."""
+        root = Path.home() / ".cybersentinel" / "reports"
+        results = []
+        if not root.exists():
+            return results
+        # consider network and web_audit categories
+        for category in ["network", "web_audit"]:
+            cat_dir = root / category
+            if not cat_dir.exists():
+                continue
+            for run_dir in sorted([p for p in cat_dir.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
+                summary = {
+                    "target": run_dir.name,
+                    "date": "",
+                    "status": "Completed",
+                    "findings": 0,
+                    "report_dir": str(run_dir),
+                    "html": str(run_dir / "report.html"),
+                    "pdf": str(run_dir / "report.pdf"),
+                    "json": str(run_dir / "report.json"),
+                }
+                rpt_json = run_dir / "report.json"
+                if rpt_json.exists():
+                    try:
+                        data = json.loads(rpt_json.read_text(encoding="utf-8"))
+                        summary["target"] = data.get("target") or summary["target"]
+                        ts = data.get("timestamp") or ""
+                        summary["date"] = (ts.split("T")[0] if "T" in ts else ts) or summary["date"]
+                        sc = data.get("summary", {}).get("severity_counts", {})
+                        summary["findings"] = int(data.get("summary", {}).get("total_findings", sum(sc.values() or [0])))
+                    except Exception:
+                        pass
+                # Fill date from directory mtime if missing
+                if not summary["date"]:
+                    try:
+                        summary["date"] = str(datetime.fromtimestamp(run_dir.stat().st_mtime).date())
+                    except Exception:
+                        summary["date"] = ""
+                results.append(summary)
+        # limit to 10
+        return results[:10]
     
     def _create_quick_actions(self) -> QFrame:
         """Create the quick actions section."""
@@ -145,12 +199,19 @@ class DashboardTab(QWidget):
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(20, 20, 20, 20)
         
-        # Section title
+        # Section title with refresh button
+        header_row = QHBoxLayout()
         title = QLabel("Recent Scans")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.setFixedHeight(28)
+        refresh_btn.clicked.connect(self.reload_recent_scans)
+        header_row.addWidget(title)
+        header_row.addStretch()
+        header_row.addWidget(refresh_btn)
         
         # Scroll area for scan items
         scroll_area = QScrollArea()
@@ -158,34 +219,43 @@ class DashboardTab(QWidget):
         scroll_area.setFrameShape(QFrame.NoFrame)
         
         # Container widget for scan items
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(10)
+        self.recent_container = QWidget()
+        self.recent_container_layout = QVBoxLayout(self.recent_container)
+        self.recent_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_container_layout.setSpacing(10)
         
-        # Add sample scan items (in a real app, these would be loaded from the database)
-        sample_scans = [
-            {"target": "example.com", "date": "2023-09-27", "status": "Completed", "findings": 5},
-            {"target": "192.168.1.1/24", "date": "2023-09-26", "status": "Completed", "findings": 12},
-            {"target": "https://test-site.com", "date": "2023-09-25", "status": "Failed", "findings": 0},
-        ]
-        
-        for scan in sample_scans:
+        # Populate from saved reports
+        for scan in self._get_recent_reports():
             scan_item = self._create_scan_item(scan)
-            container_layout.addWidget(scan_item)
+            self.recent_container_layout.addWidget(scan_item)
         
         # Add stretch to push items to the top
-        container_layout.addStretch()
+        self.recent_container_layout.addStretch()
         
         # Set the container as the scroll area's widget
-        scroll_area.setWidget(container)
+        scroll_area.setWidget(self.recent_container)
         
         # Add widgets to main layout
-        layout.addWidget(title)
+        layout.addLayout(header_row)
         layout.addSpacing(10)
         layout.addWidget(scroll_area)
         
         return frame
+
+    def reload_recent_scans(self):
+        """Rebuild the recent scans list from disk."""
+        # Remove existing items (except final stretch)
+        # Clear all widgets from layout
+        while self.recent_container_layout.count() > 0:
+            item = self.recent_container_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+        # Rebuild
+        for scan in self._get_recent_reports():
+            scan_item = self._create_scan_item(scan)
+            self.recent_container_layout.addWidget(scan_item)
+        self.recent_container_layout.addStretch()
     
     def _create_status_section(self) -> QFrame:
         """Create the status section."""
@@ -369,35 +439,40 @@ class DashboardTab(QWidget):
     # Event handlers
     def _on_new_scan(self):
         """Handle New Scan button click."""
-        # This will be connected to the main window's new scan action
-        if self.parent() and hasattr(self.parent(), 'new_scan_action'):
-            self.parent().new_scan_action.trigger()
+        mw = self.window()
+        if mw and hasattr(mw, 'tab_widget') and hasattr(mw, 'tabs'):
+            # Switch to scanner tab and focus target
+            mw.tab_widget.setCurrentIndex(mw.tabs.get("scanner", 0))
+            if hasattr(mw, 'scanner_tab') and hasattr(mw.scanner_tab, 'target_input'):
+                mw.scanner_tab.target_input.setFocus()
     
     def _on_ssl_analyzer(self):
         """Handle SSL Analyzer button click."""
-        # This will switch to the SSL Analyzer tab
-        if self.parent() and hasattr(self.parent(), 'tab_widget'):
-            self.parent().tab_widget.setCurrentIndex(
-                self.parent().tabs["ssl"]
-            )
+        mw = self.window()
+        if mw and hasattr(mw, 'tab_widget') and hasattr(mw, 'tabs'):
+            mw.tab_widget.setCurrentIndex(mw.tabs.get("ssl", 0))
     
     def _on_web_tests(self):
         """Handle Web Tests button click."""
-        # This will switch to the Web Tests tab
-        if self.parent() and hasattr(self.parent(), 'tab_widget'):
-            self.parent().tab_widget.setCurrentIndex(
-                self.parent().tabs["web_tests"]
-            )
+        mw = self.window()
+        if mw and hasattr(mw, 'tab_widget') and hasattr(mw, 'tabs'):
+            mw.tab_widget.setCurrentIndex(mw.tabs.get("web_tests", 0))
     
     def _on_reports(self):
         """Handle Reports button click."""
-        # This will switch to the Reports tab
-        if self.parent() and hasattr(self.parent(), 'tab_widget'):
-            self.parent().tab_widget.setCurrentIndex(
-                self.parent().tabs["reports"]
-            )
+        mw = self.window()
+        if mw and hasattr(mw, 'tab_widget') and hasattr(mw, 'tabs'):
+            mw.tab_widget.setCurrentIndex(mw.tabs.get("reports", 0))
     
     def _on_view_scan(self, scan_data):
         """Handle View button click on a scan item."""
-        # TODO: Implement view scan details
-        print(f"Viewing scan: {scan_data}")
+        # Open HTML report if exists, else PDF, else JSON
+        for key in ("html", "pdf", "json"):
+            path = scan_data.get(key)
+            if path and Path(path).exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+                return
+        # If none, open folder
+        report_dir = scan_data.get("report_dir")
+        if report_dir and Path(report_dir).exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(report_dir))

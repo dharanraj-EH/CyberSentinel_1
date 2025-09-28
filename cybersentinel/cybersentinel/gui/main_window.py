@@ -24,8 +24,9 @@ from .settings import SettingsDialog
 class MainWindow(QMainWindow):
     """Main application window."""
     
-    def __init__(self, parent=None):
+    def __init__(self, auth_manager=None, parent=None):
         super().__init__(parent)
+        self.auth_manager = auth_manager
         self.setWindowTitle(f"CyberSentinel v{__version__}")
         self.setMinimumSize(1024, 768)
         
@@ -156,6 +157,15 @@ class MainWindow(QMainWindow):
         self.about_qt_action.setStatusTip("Show the Qt library's About box")
         # Use QMessageBox.aboutQt to avoid direct QApplication reference
         self.about_qt_action.triggered.connect(lambda: QMessageBox.aboutQt(self))
+        
+        # User menu actions
+        self.user_profile_action = QAction("&Profile", self)
+        self.user_profile_action.setStatusTip("View user profile")
+        self.user_profile_action.triggered.connect(self._show_user_profile)
+        
+        self.logout_action = QAction("&Logout", self)
+        self.logout_action.setStatusTip("Logout from CyberSentinel")
+        self.logout_action.triggered.connect(self._logout)
     
     def _create_menus(self):
         """Create the main menu bar."""
@@ -179,6 +189,12 @@ class MainWindow(QMainWindow):
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.toggle_toolbar_action)
         view_menu.addAction(self.toggle_statusbar_action)
+        
+        # User menu
+        user_menu = menubar.addMenu("&User")
+        user_menu.addAction(self.user_profile_action)
+        user_menu.addSeparator()
+        user_menu.addAction(self.logout_action)
         
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -206,7 +222,12 @@ class MainWindow(QMainWindow):
     
     def _create_statusbar(self):
         """Create the status bar."""
-        self.statusBar().showMessage("Ready")
+        status_message = "Ready"
+        if self.auth_manager and self.auth_manager.is_logged_in():
+            user = self.auth_manager.get_current_user()
+            if user:
+                status_message = f"Ready | Logged in as: {user.full_name} ({user.username})"
+        self.statusBar().showMessage(status_message)
     
     def _apply_styles(self):
         """Apply styles to the application."""
@@ -287,12 +308,13 @@ class MainWindow(QMainWindow):
         QMessageBox.about(
             self,
             "About CyberSentinel",
-            f"<h2>CyberSentinel v{__version__}</h2>"
-            "<p>A comprehensive vulnerability scanner with a modern GUI.</p>"
-            "<p>Copyright © 2023 Your Name. All rights reserved.</p>"
-            "<p>Licensed under the MIT License.</p>"
-            "<p>This software is provided 'as-is', without any express or "
-            "implied warranty.</p>"
+            (
+                f"<h2>CyberSentinel v{__version__}</h2>"
+                "<p>A comprehensive vulnerability scanner with a modern GUI.</p>"
+                "<p><b>M DHARAN RAJ · Final Year Project</b></p>"
+                "<p>Licensed under the MIT License.</p>"
+                "<p>This software is provided 'as-is', without any express or implied warranty.</p>"
+            )
         )
     
     def _close_tab(self, index):
@@ -321,3 +343,40 @@ class MainWindow(QMainWindow):
         """Handle web test completion."""
         # TODO: Handle test results
         self.statusBar().showMessage("Web test completed", 5000)
+    
+    def _show_user_profile(self):
+        """Show user profile dialog."""
+        if not self.auth_manager or not self.auth_manager.is_logged_in():
+            QMessageBox.warning(self, "Not Logged In", "You are not currently logged in.")
+            return
+        
+        user = self.auth_manager.get_current_user()
+        if user:
+            profile_info = (
+                f"<h3>User Profile</h3>"
+                f"<p><b>Username:</b> {user.username}</p>"
+                f"<p><b>Full Name:</b> {user.full_name}</p>"
+                f"<p><b>Email:</b> {user.email}</p>"
+                f"<p><b>Role:</b> {user.role.title()}</p>"
+                f"<p><b>Account Created:</b> {user.created_at.strftime('%Y-%m-%d %H:%M:%S') if user.created_at else 'Unknown'}</p>"
+                f"<p><b>Last Login:</b> {user.last_login.strftime('%Y-%m-%d %H:%M:%S') if user.last_login else 'Never'}</p>"
+            )
+            QMessageBox.information(self, "User Profile", profile_info)
+    
+    def _logout(self):
+        """Logout the current user."""
+        if not self.auth_manager:
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            "Logout Confirmation",
+            "Are you sure you want to logout?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.auth_manager.logout()
+            QMessageBox.information(self, "Logged Out", "You have been logged out successfully.")
+            self.close()  # Close the main window, which will exit the application

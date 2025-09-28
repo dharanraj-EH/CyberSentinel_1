@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
     QMessageBox, QGroupBox, QFormLayout, QTabWidget, QTextEdit,
     QTreeWidget, QTreeWidgetItem, QComboBox, QSpinBox, QSplitter,
-    QStyle, QApplication, QFileDialog
+    QStyle, QApplication, QFileDialog, QCheckBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QTextCursor, QIcon, QFont
@@ -189,6 +189,13 @@ class SSLAnalyzerTab(QWidget):
         self.cert_serial = QLabel("-")
         self.cert_sig_algorithm = QLabel("-")
         self.cert_key_size = QLabel("-")
+        self.cert_pubkey_type = QLabel("-")
+        self.cert_tls_version = QLabel("-")
+        self.cert_cipher = QLabel("-")
+        self.cert_san = QLabel("-")
+        self.cert_san.setWordWrap(True)
+        self.cert_verified = QLabel("-")
+        self.cert_hostname_match = QLabel("-")
         
         cert_layout.addRow("Subject:", self.cert_subject)
         cert_layout.addRow("Issuer:", self.cert_issuer)
@@ -197,7 +204,13 @@ class SSLAnalyzerTab(QWidget):
         cert_layout.addRow("Days Left:", self.cert_days_left)
         cert_layout.addRow("Serial Number:", self.cert_serial)
         cert_layout.addRow("Signature Algorithm:", self.cert_sig_algorithm)
+        cert_layout.addRow("Public Key:", self.cert_pubkey_type)
         cert_layout.addRow("Key Size:", self.cert_key_size)
+        cert_layout.addRow("TLS Version:", self.cert_tls_version)
+        cert_layout.addRow("Cipher:", self.cert_cipher)
+        cert_layout.addRow("Subject Alt Names:", self.cert_san)
+        cert_layout.addRow("Verified:", self.cert_verified)
+        cert_layout.addRow("Hostname Match:", self.cert_hostname_match)
         
         # Protocols tab
         self.protocols_tab = QWidget()
@@ -350,6 +363,12 @@ class SSLAnalyzerTab(QWidget):
         self.cert_serial.setText("-")
         self.cert_sig_algorithm.setText("-")
         self.cert_key_size.setText("-")
+        self.cert_pubkey_type.setText("-")
+        self.cert_tls_version.setText("-")
+        self.cert_cipher.setText("-")
+        self.cert_san.setText("-")
+        self.cert_verified.setText("-")
+        self.cert_hostname_match.setText("-")
         
         # Clear protocols table
         self.protocols_table.setRowCount(0)
@@ -421,16 +440,41 @@ class SSLAnalyzerTab(QWidget):
                 self.cert_serial.setText(str(cert_info['serial_number']))
             if 'signature_algorithm' in cert_info:
                 self.cert_sig_algorithm.setText(str(cert_info['signature_algorithm']))
-            if 'key_size' in cert_info:
+            if 'public_key_type' in cert_info:
+                self.cert_pubkey_type.setText(str(cert_info['public_key_type']))
+            if 'key_size' in cert_info and cert_info.get('key_size'):
                 self.cert_key_size.setText(f"{cert_info['key_size']} bits")
             
+            # TLS and cipher
+            if 'tls_version' in cert_info:
+                self.cert_tls_version.setText(str(cert_info['tls_version']))
+            if 'cipher' in cert_info and isinstance(cert_info['cipher'], dict):
+                c = cert_info['cipher']
+                cname = c.get('name', '')
+                cbits = c.get('bits', '')
+                self.cert_cipher.setText(f"{cname} ({cbits} bits)")
+
+            # SAN
+            if 'subject_alt_name' in cert_info:
+                san = cert_info.get('subject_alt_name') or []
+                if isinstance(san, list):
+                    self.cert_san.setText("\n".join(san) if san else "-")
+                else:
+                    self.cert_san.setText(str(san))
+
+            # Verified and hostname match
+            if 'verified' in cert_info:
+                self.cert_verified.setText("Yes" if cert_info.get('verified') else "No")
+            if 'hostname_matches' in cert_info and cert_info.get('hostname_matches') is not None:
+                self.cert_hostname_match.setText("Yes" if cert_info.get('hostname_matches') else "No")
+
             # Check for self-signed certificate
             if cert_info.get('self_signed', False):
                 self.append_output("[WARNING] Certificate is self-signed!")
             
-            # Check for weak key size
-            if 'key_size' in cert_info and cert_info['key_size'] < 2048:
-                self.append_output(f"[WARNING] Weak key size: {cert_info['key_size']} bits (recommended: 2048+)")
+            # Check for weak key size (RSA only)
+            if cert_info.get('public_key_type', '').startswith('RSA') and cert_info.get('key_size') and cert_info['key_size'] < 2048:
+                self.append_output(f"[WARNING] Weak RSA key size: {cert_info['key_size']} bits (recommended: 2048+)")
             
         except Exception as e:
             logger.error(f"Error displaying certificate info: {e}", exc_info=True)
@@ -506,8 +550,9 @@ class SSLAnalyzerTab(QWidget):
                 # Description
                 self.vulns_table.setItem(row, 2, QTableWidgetItem(vuln.get('description', 'No description available.')))
                 
-                # Solution
-                self.vulns_table.setItem(row, 3, QTableWidgetItem(vuln.get('solution', 'No solution provided.')))
+                # Solution/Remediation
+                rem = vuln.get('solution') or vuln.get('remediation') or 'No solution provided.'
+                self.vulns_table.setItem(row, 3, QTableWidgetItem(rem))
             
             # Resize columns to content
             self.vulns_table.resizeColumnsToContents()
