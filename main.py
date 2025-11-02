@@ -3,7 +3,12 @@
 CyberSentinel - A comprehensive vulnerability scanner with a modern GUI.
 """
 import sys
+import os
 import logging
+
+# Add the project root to Python path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from PyQt5.QtWidgets import QApplication
 from app.gui.main_window import CyberSentinelMainWindow
 from app.core.application import CyberSentinelApp

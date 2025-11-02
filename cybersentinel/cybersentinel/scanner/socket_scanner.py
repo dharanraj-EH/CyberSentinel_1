@@ -1,9 +1,4 @@
-"""
-Socket-based port scanner for CyberSentinel.
 
-This module provides a pure Python implementation of a port scanner
-that can be used as a fallback when Nmap is not available.
-"""
 
 import socket
 import concurrent.futures

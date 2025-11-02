@@ -190,11 +190,12 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.toggle_toolbar_action)
         view_menu.addAction(self.toggle_statusbar_action)
         
-        # User menu
-        user_menu = menubar.addMenu("&User")
-        user_menu.addAction(self.user_profile_action)
-        user_menu.addSeparator()
-        user_menu.addAction(self.logout_action)
+        # User menu (only show if authentication is enabled)
+        if self.auth_manager:
+            user_menu = menubar.addMenu("&User")
+            user_menu.addAction(self.user_profile_action)
+            user_menu.addSeparator()
+            user_menu.addAction(self.logout_action)
         
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -227,6 +228,8 @@ class MainWindow(QMainWindow):
             user = self.auth_manager.get_current_user()
             if user:
                 status_message = f"Ready | Logged in as: {user.full_name} ({user.username})"
+        else:
+            status_message = "Ready | CyberSentinel Vulnerability Scanner"
         self.statusBar().showMessage(status_message)
     
     def _apply_styles(self):

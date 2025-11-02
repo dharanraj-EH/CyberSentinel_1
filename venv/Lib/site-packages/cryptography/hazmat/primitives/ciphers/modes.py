@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import abc
-import typing
 
 from cryptography import utils
 from cryptography.exceptions import UnsupportedAlgorithm, _Reasons
@@ -62,7 +61,7 @@ class ModeWithNonce(Mode, metaclass=abc.ABCMeta):
 class ModeWithAuthenticationTag(Mode, metaclass=abc.ABCMeta):
     @property
     @abc.abstractmethod
-    def tag(self) -> typing.Optional[bytes]:
+    def tag(self) -> bytes | None:
         """
         The value of the tag supplied to the constructor of this mode.
         """
@@ -78,12 +77,9 @@ def _check_aes_key_length(self: Mode, algorithm: CipherAlgorithm) -> None:
 def _check_iv_length(
     self: ModeWithInitializationVector, algorithm: BlockCipherAlgorithm
 ) -> None:
-    if len(self.initialization_vector) * 8 != algorithm.block_size:
-        raise ValueError(
-            "Invalid IV size ({}) for {}.".format(
-                len(self.initialization_vector), self.name
-            )
-        )
+    iv_len = len(self.initialization_vector)
+    if iv_len * 8 != algorithm.block_size:
+        raise ValueError(f"Invalid IV size ({iv_len}) for {self.name}.")
 
 
 def _check_nonce_length(
@@ -225,7 +221,7 @@ class GCM(ModeWithInitializationVector, ModeWithAuthenticationTag):
     def __init__(
         self,
         initialization_vector: bytes,
-        tag: typing.Optional[bytes] = None,
+        tag: bytes | None = None,
         min_tag_length: int = 16,
     ):
         # OpenSSL 3.0.0 constrains GCM IVs to [64, 1024] bits inclusive
@@ -243,15 +239,14 @@ class GCM(ModeWithInitializationVector, ModeWithAuthenticationTag):
                 raise ValueError("min_tag_length must be >= 4")
             if len(tag) < min_tag_length:
                 raise ValueError(
-                    "Authentication tag must be {} bytes or longer.".format(
-                        min_tag_length
-                    )
+                    f"Authentication tag must be {min_tag_length} bytes or "
+                    "longer."
                 )
         self._tag = tag
         self._min_tag_length = min_tag_length
 
     @property
-    def tag(self) -> typing.Optional[bytes]:
+    def tag(self) -> bytes | None:
         return self._tag
 
     @property
@@ -268,7 +263,6 @@ class GCM(ModeWithInitializationVector, ModeWithAuthenticationTag):
         block_size_bytes = algorithm.block_size // 8
         if self._tag is not None and len(self._tag) > block_size_bytes:
             raise ValueError(
-                "Authentication tag cannot be more than {} bytes.".format(
-                    block_size_bytes
-                )
+                f"Authentication tag cannot be more than {block_size_bytes} "
+                "bytes."
             )

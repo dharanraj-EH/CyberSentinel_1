@@ -372,11 +372,24 @@ class LoginDialog(QDialog):
         form_group = QGroupBox("Sign In")
         form_layout = QFormLayout(form_group)
         form_layout.setSpacing(15)
+        form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        form_layout.setLabelAlignment(Qt.AlignLeft)
         
         # Username or email
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username or email address")
         self.username_input.setMinimumHeight(35)
+        self.username_input.setStyleSheet("""
+            QLineEdit {
+                border: 2px solid #bdc3c7;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border-color: #3498db;
+            }
+        """)
         form_layout.addRow("Username/Email:", self.username_input)
         
         # Password
@@ -384,6 +397,17 @@ class LoginDialog(QDialog):
         self.password_input.setPlaceholderText("Enter your password")
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setMinimumHeight(35)
+        self.password_input.setStyleSheet("""
+            QLineEdit {
+                border: 2px solid #bdc3c7;
+                border-radius: 5px;
+                padding: 8px;
+                font-size: 14px;
+            }
+            QLineEdit:focus {
+                border-color: #3498db;
+            }
+        """)
         self.password_input.returnPressed.connect(self._login)
         form_layout.addRow("Password:", self.password_input)
         

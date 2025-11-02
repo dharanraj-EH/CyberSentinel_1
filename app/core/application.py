@@ -2,6 +2,8 @@
 Core application class for CyberSentinel.
 """
 import logging
+import time
+import uuid
 from typing import Dict, Any, Optional
 from pathlib import Path
 import json
@@ -52,8 +54,6 @@ class CyberSentinelApp:
         """
         try:
             # Generate a unique scan ID
-            import uuid
-            import time
             scan_id = f"scan_{int(time.time())}_{uuid.uuid4().hex[:6]}"
             
             # Create a new scan result

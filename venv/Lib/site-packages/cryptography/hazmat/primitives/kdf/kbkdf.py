@@ -40,12 +40,12 @@ class _KBKDFDeriver:
         mode: Mode,
         length: int,
         rlen: int,
-        llen: typing.Optional[int],
+        llen: int | None,
         location: CounterLocation,
-        break_location: typing.Optional[int],
-        label: typing.Optional[bytes],
-        context: typing.Optional[bytes],
-        fixed: typing.Optional[bytes],
+        break_location: int | None,
+        label: bytes | None,
+        context: bytes | None,
+        fixed: bytes | None,
     ):
         assert callable(prf)
 
@@ -75,7 +75,7 @@ class _KBKDFDeriver:
 
         if (label or context) and fixed:
             raise ValueError(
-                "When supplying fixed data, " "label and context are ignored."
+                "When supplying fixed data, label and context are ignored."
             )
 
         if rlen is None or not self._valid_byte_length(rlen):
@@ -86,6 +86,9 @@ class _KBKDFDeriver:
 
         if llen is not None and not isinstance(llen, int):
             raise TypeError("llen must be an integer")
+
+        if llen == 0:
+            raise ValueError("llen must be non-zero")
 
         if label is None:
             label = b""
@@ -181,14 +184,14 @@ class KBKDFHMAC(KeyDerivationFunction):
         mode: Mode,
         length: int,
         rlen: int,
-        llen: typing.Optional[int],
+        llen: int | None,
         location: CounterLocation,
-        label: typing.Optional[bytes],
-        context: typing.Optional[bytes],
-        fixed: typing.Optional[bytes],
+        label: bytes | None,
+        context: bytes | None,
+        fixed: bytes | None,
         backend: typing.Any = None,
         *,
-        break_location: typing.Optional[int] = None,
+        break_location: int | None = None,
     ):
         if not isinstance(algorithm, hashes.HashAlgorithm):
             raise UnsupportedAlgorithm(
@@ -239,14 +242,14 @@ class KBKDFCMAC(KeyDerivationFunction):
         mode: Mode,
         length: int,
         rlen: int,
-        llen: typing.Optional[int],
+        llen: int | None,
         location: CounterLocation,
-        label: typing.Optional[bytes],
-        context: typing.Optional[bytes],
-        fixed: typing.Optional[bytes],
+        label: bytes | None,
+        context: bytes | None,
+        fixed: bytes | None,
         backend: typing.Any = None,
         *,
-        break_location: typing.Optional[int] = None,
+        break_location: int | None = None,
     ):
         if not issubclass(
             algorithm, ciphers.BlockCipherAlgorithm
@@ -257,7 +260,7 @@ class KBKDFCMAC(KeyDerivationFunction):
             )
 
         self._algorithm = algorithm
-        self._cipher: typing.Optional[ciphers.BlockCipherAlgorithm] = None
+        self._cipher: ciphers.BlockCipherAlgorithm | None = None
 
         self._deriver = _KBKDFDeriver(
             self._prf,

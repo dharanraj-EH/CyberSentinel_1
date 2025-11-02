@@ -67,7 +67,9 @@ class CyberSentinelMainWindow(QMainWindow):
         self.scan_worker = None
         self.scan_thread = None
         
+        # Set window title
         self.setWindowTitle("CyberSentinel - Vulnerability Scanner")
+        
         self.setMinimumSize(1024, 768)
         
         # Set application icon
