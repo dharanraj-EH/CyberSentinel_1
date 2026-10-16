@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cybersentinel-desktop"
+version = "0.3.0"
+description = "Local desktop security assessment and remediation workspace"
+requires-python = ">=3.10"
+dependencies = [
+  "PyQt5>=5.15.11,<6", "requests>=2.32,<3", "cryptography>=43",
+  "beautifulsoup4>=4.12,<5", "packaging>=24", "reportlab>=4.2",
+  "defusedxml>=0.7.1,<1", "python-evtx>=0.8.1,<1"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyinstaller>=6"]
+
+[project.gui-scripts]
+cybersentinel = "cybersentinel.application:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cybersentinel*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"cybersentinel" = ["icons/*.svg"]

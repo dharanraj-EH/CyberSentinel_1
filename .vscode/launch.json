@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [{
+    "name": "CyberSentinel Desktop",
+    "type": "debugpy",
+    "request": "launch",
+    "program": "${workspaceFolder}/run_desktop.py",
+    "console": "integratedTerminal",
+    "cwd": "${workspaceFolder}",
+    "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+  }]
+}

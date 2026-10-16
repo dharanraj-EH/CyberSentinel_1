@@ -1,22 +1,2 @@
-# Core dependencies
-PyQt5>=5.15.0
-python-nmap>=0.7.1
-requests>=2.25.1
-cryptography>=3.4.7
-pyOpenSSL>=20.0.1
-sslyze>=5.0.0
-
-# Web vulnerability scanning
-beautifulsoup4>=4.9.3
-lxml>=4.6.3
-requests-toolbelt>=0.9.1
-
-# Reporting
-reportlab>=3.6.1
-Jinja2>=2.11.3
-PyYAML>=5.4.1
-
-# Utilities
-tqdm>=4.61.0
-python-dotenv>=0.19.0
-colorama>=0.4.4
+# Runtime is defined in pyproject.toml. Use requirements-lock.txt for this verified build.
+-e .

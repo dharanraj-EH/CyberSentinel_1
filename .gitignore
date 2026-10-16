@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.log
+.pytest_cache/
+build/
+dist/
+*.egg-info/
+*.spec
+desktop-preview.png
+verification-output/
+
+.artifacts/
